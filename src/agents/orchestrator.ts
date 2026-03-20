@@ -1,8 +1,9 @@
 import { randomUUID } from 'crypto'
 import { Agent, type EventEmitter } from './base.js'
-import type { ModelRole } from '../llm/client.js'
+import type { ModelRole, Message } from '../llm/client.js'
 import { buildContext, BRAIN_DIR } from '../brain/index.js'
 import { config } from '../config.js'
+import { messages as msgStore } from '../store/db.js'
 
 function buildSystemPrompt(brainContext: string): string {
   return `You are eggbot, an autonomous AI assistant with full control of the system.
@@ -84,14 +85,17 @@ Report your full results when complete.`,
   }
 
   async handleMessage(userMessage: string): Promise<string> {
-    // Pull relevant brain context before spinning up the boss
-    const brainContext = await buildContext(userMessage)
+    const [brainContext, history] = await Promise.all([
+      buildContext(userMessage),
+      this.loadHistory(),
+    ])
 
     const boss = new Agent({
       name: 'boss',
       model: 'orchestrator',
       sessionId: this.sessionId,
       systemPrompt: buildSystemPrompt(brainContext),
+      history,
       emit: this.emit,
       spawnAgent: (n, t, m, pid) => this.spawnAgent(n, t, m, pid),
     })
@@ -103,6 +107,15 @@ Report your full results when complete.`,
     } finally {
       this.activeAgents.delete(boss.id)
     }
+  }
+
+  /** Load the last N user/assistant turns from the session as conversation history. */
+  private async loadHistory(maxTurns = 20): Promise<Message[]> {
+    const all = msgStore.list(this.sessionId)
+    // Only user/assistant messages (skip system, tool, heartbeat/scheduler runs)
+    const turns = all.filter(m => m.role === 'user' || m.role === 'assistant')
+    const recent = turns.slice(-maxTurns)
+    return recent.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
   }
 
   abortAll() {

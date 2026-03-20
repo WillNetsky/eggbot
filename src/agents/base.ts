@@ -31,6 +31,7 @@ export class Agent {
     model: ModelRole
     sessionId: string
     systemPrompt: string
+    history?: Message[]
     emit: EventEmitter
     spawnAgent: (name: string, task: string, model: string, parentId: string) => Agent
   }) {
@@ -42,7 +43,10 @@ export class Agent {
     this.spawnAgent = opts.spawnAgent
     this.abortController = new AbortController()
 
-    this.messages = [{ role: 'system', content: opts.systemPrompt }]
+    this.messages = [
+      { role: 'system', content: opts.systemPrompt },
+      ...(opts.history ?? []),
+    ]
 
     agentRuns.insert({
       id: this.id,
