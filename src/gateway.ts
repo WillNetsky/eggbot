@@ -89,7 +89,11 @@ app.register(async (fastify) => {
 
       // Join/create a session
       if (msg.type === 'join') {
-        const sessionId = (msg.session_id as string | undefined) ?? randomUUID()
+        const requestedId = msg.session_id as string | undefined
+        // If no session requested, resume the most recent one (or create new)
+        const sessionId = requestedId
+          ?? sessions.list()[0]?.id
+          ?? randomUUID()
 
         if (!sessions.get(sessionId)) {
           sessions.create(sessionId)
