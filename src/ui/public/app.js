@@ -94,6 +94,14 @@ function handleWsMessage(data) {
       setRunning(false)
       appendSystemMessage(`Error: ${data.message}`, true)
       break
+
+    case 'log':
+      appendLog(data.entry)
+      break
+
+    case 'log_history':
+      for (const entry of data.entries) appendLog(entry)
+      break
   }
 }
 
@@ -397,6 +405,73 @@ inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto'
   inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px'
 })
+
+// ── Debug panel ───────────────────────────────────────────────────────────────
+
+const debugPanel = document.getElementById('debug-panel')
+const debugLog = document.getElementById('debug-log')
+const debugBtn = document.getElementById('debug-btn')
+const debugClose = document.getElementById('debug-close')
+const debugClear = document.getElementById('debug-clear')
+
+let debugSubscribed = false
+
+function toggleDebug() {
+  const hidden = debugPanel.classList.toggle('hidden')
+  if (!hidden && !debugSubscribed) {
+    ws.send(JSON.stringify({ type: 'debug_subscribe' }))
+    debugSubscribed = true
+  }
+}
+
+debugBtn.addEventListener('click', toggleDebug)
+debugClose.addEventListener('click', () => debugPanel.classList.add('hidden'))
+debugClear.addEventListener('click', () => { debugLog.innerHTML = '' })
+
+document.getElementById('debug-filter-debug').addEventListener('change', applyDebugFilters)
+document.getElementById('debug-filter-info').addEventListener('change', applyDebugFilters)
+document.getElementById('debug-filter-warn').addEventListener('change', applyDebugFilters)
+document.getElementById('debug-filter-error').addEventListener('change', applyDebugFilters)
+
+function applyDebugFilters() {
+  const show = {
+    debug: document.getElementById('debug-filter-debug').checked,
+    info: document.getElementById('debug-filter-info').checked,
+    warn: document.getElementById('debug-filter-warn').checked,
+    error: document.getElementById('debug-filter-error').checked,
+  }
+  for (const line of debugLog.querySelectorAll('.log-line')) {
+    const level = line.dataset.level
+    line.style.display = show[level] ? '' : 'none'
+  }
+}
+
+function appendLog(entry) {
+  const show = {
+    debug: document.getElementById('debug-filter-debug').checked,
+    info: document.getElementById('debug-filter-info').checked,
+    warn: document.getElementById('debug-filter-warn').checked,
+    error: document.getElementById('debug-filter-error').checked,
+  }
+
+  const line = document.createElement('div')
+  line.className = 'log-line'
+  line.dataset.level = entry.level
+  if (!show[entry.level]) line.style.display = 'none'
+
+  const ts = new Date(entry.ts).toTimeString().slice(0, 8)
+  const dataStr = entry.data !== undefined ? ' ' + JSON.stringify(entry.data) : ''
+
+  line.innerHTML = `
+    <span class="log-ts">${ts}</span>
+    <span class="log-level ${entry.level}">${entry.level}</span>
+    <span class="log-msg">${escapeHtml(entry.msg)}</span>
+    <span class="log-data">${escapeHtml(dataStr)}</span>
+  `
+
+  debugLog.appendChild(line)
+  debugLog.scrollTop = debugLog.scrollHeight
+}
 
 // Start
 connect()

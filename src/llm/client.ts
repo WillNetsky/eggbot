@@ -1,4 +1,5 @@
 import { config } from '../config.js'
+import log from '../logger.js'
 
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -51,6 +52,8 @@ export async function* streamChat(
     body.tools = tools
   }
 
+  log.debug(`[llm] → ${modelName}`, { tools: tools?.map(t => t.function.name), messages: messages.length })
+
   const res = await fetch(`${config.ollama.host}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -59,7 +62,9 @@ export async function* streamChat(
   })
 
   if (!res.ok) {
-    throw new Error(`Ollama error: ${res.status} ${await res.text()}`)
+    const text = await res.text()
+    log.error(`[llm] Ollama error ${res.status}`, text)
+    throw new Error(`Ollama error: ${res.status} ${text}`)
   }
 
   const reader = res.body!.getReader()
@@ -88,14 +93,28 @@ export async function* streamChat(
         yield { type: 'text', delta: content }
       }
 
-      // Tool calls
-      const toolCalls = msg.tool_calls as ToolCall[] | undefined
-      if (toolCalls && toolCalls.length > 0) {
-        pendingToolCalls = toolCalls
+      // Tool calls — Ollama returns arguments as an object, not a JSON string.
+      // Normalize to OpenAI format (string arguments, guaranteed id).
+      const rawToolCalls = msg.tool_calls as Array<{
+        id?: string
+        function: { name: string; arguments: unknown }
+      }> | undefined
+      if (rawToolCalls && rawToolCalls.length > 0) {
+        pendingToolCalls = rawToolCalls.map((tc, i) => ({
+          id: tc.id ?? `call_${i}`,
+          type: 'function' as const,
+          function: {
+            name: tc.function.name,
+            arguments: typeof tc.function.arguments === 'string'
+              ? tc.function.arguments
+              : JSON.stringify(tc.function.arguments),
+          },
+        }))
       }
 
       if (parsed.done) {
         if (pendingToolCalls.length > 0) {
+          log.debug(`[llm] tool_calls`, pendingToolCalls.map(tc => ({ name: tc.function.name, args: tc.function.arguments })))
           yield { type: 'tool_calls', calls: pendingToolCalls }
         }
         yield { type: 'done' }

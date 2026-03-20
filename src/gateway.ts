@@ -8,6 +8,8 @@ import { config } from './config.js'
 import { sessions, messages } from './store/db.js'
 import { Orchestrator } from './agents/orchestrator.js'
 import type { AgentEvent } from './agents/base.js'
+import log, { type LogEntry } from './logger.js'
+import { listNotes } from './brain/index.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -23,6 +25,19 @@ await app.register(staticFiles, {
 const activeOrchestrators = new Map<string, Orchestrator>()
 // Track WebSocket clients per session
 const sessionClients = new Map<string, Set<import('@fastify/websocket').WebSocket>>()
+// All connected debug clients
+const debugClients = new Set<import('@fastify/websocket').WebSocket>()
+// Recent log buffer (last 500 entries)
+const logBuffer: LogEntry[] = []
+
+log.onLog((entry) => {
+  logBuffer.push(entry)
+  if (logBuffer.length > 500) logBuffer.shift()
+  const payload = JSON.stringify({ type: 'log', entry })
+  for (const ws of debugClients) {
+    if (ws.readyState === 1) ws.send(payload)
+  }
+})
 
 function broadcast(sessionId: string, data: unknown) {
   const clients = sessionClients.get(sessionId)
@@ -32,6 +47,9 @@ function broadcast(sessionId: string, data: unknown) {
     if (ws.readyState === 1) ws.send(payload)
   }
 }
+
+// REST: recent logs
+app.get('/api/logs', async () => logBuffer)
 
 // REST: list sessions
 app.get('/api/sessions', async () => {
@@ -59,6 +77,13 @@ app.register(async (fastify) => {
       try {
         msg = JSON.parse(raw.toString())
       } catch {
+        return
+      }
+
+      // Subscribe to debug logs
+      if (msg.type === 'debug_subscribe') {
+        debugClients.add(socket)
+        socket.send(JSON.stringify({ type: 'log_history', entries: logBuffer }))
         return
       }
 
@@ -164,11 +189,41 @@ app.register(async (fastify) => {
       if (currentSessionId) {
         sessionClients.get(currentSessionId)?.delete(socket)
       }
+      debugClients.delete(socket)
     })
   })
 })
 
+async function isFirstRun(): Promise<boolean> {
+  const allSessions = sessions.list()
+  if (allSessions.length > 0) return false
+  const notes = await listNotes()
+  return notes.length === 0
+}
+
+const ONBOARDING_MESSAGE = `Hey — I'm eggbot. I just started up and my brain is empty.
+
+To work well for you, I'd love to know a bit about you: who you are, what you do, what machines and tools you use, ongoing projects, and anything else I should know. The more you share, the better I'll serve you — I'll remember everything in my brain and use it in every future conversation.
+
+What should I know about you?`
+
 export async function startServer() {
   await app.listen({ port: config.server.port, host: config.server.host })
+  log.info(`eggbot running at http://localhost:${config.server.port}`)
   console.log(`eggbot running at http://localhost:${config.server.port}`)
+
+  if (await isFirstRun()) {
+    log.info('First run detected — creating onboarding session')
+    const sessionId = randomUUID()
+    sessions.create(sessionId, 'Getting started')
+    messages.insert({
+      id: randomUUID(),
+      session_id: sessionId,
+      role: 'assistant',
+      content: ONBOARDING_MESSAGE,
+      agent_id: null,
+      agent_name: 'eggbot',
+      metadata: null,
+    })
+  }
 }

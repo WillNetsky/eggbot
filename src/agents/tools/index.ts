@@ -8,6 +8,7 @@ import {
   writeNote, readNote, searchNotes, searchByTag, listNotes,
   getDailyNote, appendToDailyNote, BRAIN_DIR
 } from '../../brain/index.js'
+import log from '../../logger.js'
 
 const execAsync = promisify(exec)
 
@@ -211,6 +212,7 @@ export async function executeTool(
   spawnAgent: (name: string, task: string, model: string) => Promise<string>,
   waitForAgents: (ids: string[]) => Promise<Record<string, string>>
 ): Promise<ToolResult> {
+  log.debug(`[tool] ${name}`, args)
   try {
     switch (name) {
       case 'bash': {
@@ -319,6 +321,8 @@ export async function executeTool(
         return { success: false, output: `Unknown tool: ${name}` }
     }
   } catch (err) {
-    return { success: false, output: `Error: ${err instanceof Error ? err.message : String(err)}` }
+    const msg = err instanceof Error ? err.message : String(err)
+    log.error(`[tool] ${name} failed`, msg)
+    return { success: false, output: `Error: ${msg}` }
   }
 }
