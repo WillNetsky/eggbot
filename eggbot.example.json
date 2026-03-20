@@ -22,14 +22,23 @@
   "mcp": {
     "servers": [
       {
+        "_comment": "GitHub MCP — option A: Docker (local, full control)",
+        "name": "github",
+        "command": "docker",
+        "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+        "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "your-pat-here" }
+      },
+      {
+        "_comment": "GitHub MCP — option B: remote hosted by GitHub (no Docker needed)",
+        "name": "github",
+        "url": "https://api.githubcopilot.com/mcp/",
+        "headers": { "Authorization": "Bearer your-pat-here" }
+      },
+      {
+        "_comment": "Brave Search MCP",
         "name": "brave",
         "command": "npx -y @modelcontextprotocol/server-brave-search",
         "env": { "BRAVE_API_KEY": "your-key-here" }
-      },
-      {
-        "name": "github",
-        "command": "npx -y @modelcontextprotocol/server-github",
-        "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "your-token-here" }
       }
     ]
   }

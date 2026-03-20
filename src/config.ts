@@ -9,6 +9,7 @@ interface McpServerConfig {
   command?: string
   args?: string[]
   url?: string
+  headers?: Record<string, string>
   env?: Record<string, string>
 }
 

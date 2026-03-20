@@ -14,10 +14,11 @@ import log from '../logger.js'
 
 export interface McpServerConfig {
   name: string
-  command?: string          // stdio server: e.g. "npx @modelcontextprotocol/server-github"
-  args?: string[]           // extra args
-  url?: string              // HTTP server: e.g. "http://localhost:3000/mcp"
-  env?: Record<string, string>
+  command?: string                    // stdio: first word is the executable
+  args?: string[]                     // extra args appended after command's own args
+  url?: string                        // HTTP/SSE server URL
+  headers?: Record<string, string>   // HTTP headers (e.g. Authorization for remote servers)
+  env?: Record<string, string>        // env vars for stdio servers
 }
 
 interface McpServer {
@@ -45,7 +46,10 @@ async function connectServer(cfg: McpServerConfig) {
 
   let transport
   if (cfg.url) {
-    transport = new StreamableHTTPClientTransport(new URL(cfg.url))
+    transport = new StreamableHTTPClientTransport(
+      new URL(cfg.url),
+      cfg.headers ? { requestInit: { headers: cfg.headers } } : undefined
+    )
   } else if (cfg.command) {
     const [cmd, ...defaultArgs] = cfg.command.split(' ')
     transport = new StdioClientTransport({
