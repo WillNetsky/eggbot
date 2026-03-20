@@ -4,6 +4,10 @@ import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises'
 import { join, dirname } from 'path'
 import { homedir } from 'os'
 import type { Tool } from '../../llm/client.js'
+import {
+  writeNote, readNote, searchNotes, searchByTag, listNotes,
+  getDailyNote, appendToDailyNote, BRAIN_DIR
+} from '../../brain/index.js'
 
 const execAsync = promisify(exec)
 
@@ -113,6 +117,81 @@ export const TOOLS: Tool[] = [
   {
     type: 'function',
     function: {
+      name: 'brain_write',
+      description: 'Write or update a note in the brain vault. Use [[wikilinks]] to link related notes. Path is relative to the vault, e.g. "people/will.md" or "projects/eggbot.md".',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Note path relative to vault, e.g. "knowledge/typescript.md"' },
+          content: { type: 'string', description: 'Markdown content of the note body (no frontmatter needed)' },
+          title: { type: 'string', description: 'Note title (optional, defaults to filename)' },
+          tags: { type: 'string', description: 'Comma-separated tags, e.g. "person, important"' },
+          pinned: { type: 'string', description: 'Set to "true" to pin this note so it always appears in context' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'brain_read',
+      description: 'Read a note from the brain vault by its path',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Note path relative to vault, e.g. "people/will.md"' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'brain_search',
+      description: 'Full-text search across all brain notes. Use for finding relevant knowledge before answering.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+          tag: { type: 'string', description: 'Filter by tag (optional)' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'brain_list',
+      description: 'List notes in the brain vault, optionally filtered by folder',
+      parameters: {
+        type: 'object',
+        properties: {
+          folder: { type: 'string', description: 'Subfolder to list, e.g. "people", "projects", "daily", "knowledge". Omit for all.', enum: ['people', 'projects', 'daily', 'knowledge'] },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'brain_daily',
+      description: "Get today's daily note, or append an entry to it",
+      parameters: {
+        type: 'object',
+        properties: {
+          append: { type: 'string', description: 'Text to append to today\'s daily note (optional — omit to just read it)' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'wait_for_agents',
       description: 'Wait for one or more spawned agents to complete and get their results',
       parameters: {
@@ -169,6 +248,55 @@ export async function executeTool(
         // Truncate very large responses
         const truncated = text.length > 8000 ? text.slice(0, 8000) + '\n...[truncated]' : text
         return { success: true, output: `HTTP ${res.status}\n${truncated}` }
+      }
+
+      case 'brain_write': {
+        const tags = args.tags ? args.tags.split(',').map(t => t.trim()).filter(Boolean) : undefined
+        const pinned = args.pinned === 'true'
+        const note = await writeNote(args.path, args.content, {
+          title: args.title,
+          tags,
+          pinned,
+        })
+        return { success: true, output: `Wrote note: ${note.path} (${note.meta.tags.join(', ') || 'no tags'})` }
+      }
+
+      case 'brain_read': {
+        const note = await readNote(args.path)
+        if (!note) return { success: false, output: `Note not found: ${args.path}` }
+        return { success: true, output: `# ${note.meta.title}\ntags: ${note.meta.tags.join(', ')}\nlinks: ${note.meta.links.join(', ')}\n\n${note.body}` }
+      }
+
+      case 'brain_search': {
+        if (args.tag) {
+          const results = searchByTag(args.tag)
+          if (!results.length) return { success: true, output: `No notes tagged "${args.tag}"` }
+          return { success: true, output: results.map(r => `- ${r.title} (${r.path})`).join('\n') }
+        }
+        const results = searchNotes(args.query)
+        if (!results.length) return { success: true, output: 'No matching notes found' }
+        return {
+          success: true,
+          output: results.map(r => `**${r.title}** (${r.path})\n  ${r.snippet}`).join('\n\n'),
+        }
+      }
+
+      case 'brain_list': {
+        const notes = await listNotes(args.folder)
+        if (!notes.length) return { success: true, output: 'No notes found' }
+        return {
+          success: true,
+          output: notes.map(n => `- ${n.title} (${n.path}) [${n.tags.join(', ')}] — ${n.updated}`).join('\n'),
+        }
+      }
+
+      case 'brain_daily': {
+        if (args.append) {
+          const note = await appendToDailyNote(args.append)
+          return { success: true, output: `Appended to ${note.path}` }
+        }
+        const note = await getDailyNote()
+        return { success: true, output: note.body || '(empty)' }
       }
 
       case 'spawn_agent': {
