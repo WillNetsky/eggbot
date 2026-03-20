@@ -12,6 +12,7 @@ import log, { type LogEntry } from './logger.js'
 import { listNotes } from './brain/index.js'
 import { startHeartbeat, stopHeartbeat } from './heartbeat.js'
 import { startScheduler, stopScheduler } from './scheduler.js'
+import { initMcp, shutdownMcp } from './mcp/client.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -217,6 +218,11 @@ export async function startServer() {
   await app.listen({ port: config.server.port, host: config.server.host })
   log.info(`eggbot running at http://localhost:${config.server.port}`)
   console.log(`eggbot running at http://localhost:${config.server.port}`)
+
+  // Init MCP servers before starting background runners
+  if (config.mcp?.servers?.length) {
+    await initMcp(config.mcp.servers)
+  }
 
   const broadcastFn = (sessionId: string, data: unknown) => broadcast(sessionId, data)
   startHeartbeat(broadcastFn)

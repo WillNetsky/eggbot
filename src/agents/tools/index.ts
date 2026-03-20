@@ -9,6 +9,7 @@ import {
   getDailyNote, appendToDailyNote, BRAIN_DIR
 } from '../../brain/index.js'
 import log from '../../logger.js'
+import { getMcpTools, callMcpTool, isMcpTool } from '../../mcp/client.js'
 
 const execAsync = promisify(exec)
 
@@ -17,8 +18,8 @@ export interface ToolResult {
   output: string
 }
 
-// Tool definitions for the LLM
-export const TOOLS: Tool[] = [
+// Built-in tool definitions
+const BUILTIN_TOOLS: Tool[] = [
   {
     type: 'function',
     function: {
@@ -206,6 +207,11 @@ export const TOOLS: Tool[] = [
   },
 ]
 
+/** All tools: built-ins + any connected MCP servers (dynamic at call time). */
+export function getTools(): Tool[] {
+  return [...BUILTIN_TOOLS, ...getMcpTools()]
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, string>,
@@ -317,8 +323,13 @@ export async function executeTool(
         }
       }
 
-      default:
-        return { success: false, output: `Unknown tool: ${name}` }
+      default: {
+      // Route to MCP if it's an MCP tool
+      if (isMcpTool(name)) {
+        return callMcpTool(name, args)
+      }
+      return { success: false, output: `Unknown tool: ${name}` }
+    }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

@@ -18,5 +18,19 @@
     "systemName": "eggbot",
     "heartbeatIntervalMinutes": 15,
     "goalIntervalMinutes": 30
+  },
+  "mcp": {
+    "servers": [
+      {
+        "name": "brave",
+        "command": "npx -y @modelcontextprotocol/server-brave-search",
+        "env": { "BRAVE_API_KEY": "your-key-here" }
+      },
+      {
+        "name": "github",
+        "command": "npx -y @modelcontextprotocol/server-github",
+        "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "your-token-here" }
+      }
+    ]
   }
 }

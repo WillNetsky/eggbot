@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { streamChat, chat, type Message, type ModelRole } from '../llm/client.js'
-import { executeTool, TOOLS } from './tools/index.js'
+import { executeTool, getTools } from './tools/index.js'
 import { config } from '../config.js'
 import { agentRuns } from '../store/db.js'
 
@@ -70,7 +70,7 @@ export class Agent {
       let thinkingText = ''
 
       // Stream the response
-      for await (const chunk of streamChat(this.model, this.messages, TOOLS, this.abortController.signal)) {
+      for await (const chunk of streamChat(this.model, this.messages, getTools(), this.abortController.signal)) {
         if (chunk.type === 'text') {
           thinkingText += chunk.delta
           this.emit({ type: 'thinking', agentId: this.id, agentName: this.name, delta: chunk.delta })

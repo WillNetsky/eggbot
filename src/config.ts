@@ -4,6 +4,14 @@ import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+interface McpServerConfig {
+  name: string
+  command?: string
+  args?: string[]
+  url?: string
+  env?: Record<string, string>
+}
+
 interface Config {
   ollama: {
     host: string
@@ -24,6 +32,9 @@ interface Config {
     systemName: string
     goalIntervalMinutes?: number
     heartbeatIntervalMinutes?: number
+  }
+  mcp?: {
+    servers: McpServerConfig[]
   }
 }
 
