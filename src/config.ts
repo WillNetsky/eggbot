@@ -37,6 +37,10 @@ interface Config {
   mcp?: {
     servers: McpServerConfig[]
   }
+  telegram?: {
+    token: string
+    allowedUsers?: number[]   // Telegram user IDs — leave empty to allow anyone
+  }
 }
 
 function loadConfig(): Config {

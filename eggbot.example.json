@@ -19,6 +19,10 @@
     "heartbeatIntervalMinutes": 15,
     "goalIntervalMinutes": 30
   },
+  "telegram": {
+    "token": "your-bot-token-from-botfather",
+    "allowedUsers": [123456789]
+  },
   "mcp": {
     "servers": [
       {

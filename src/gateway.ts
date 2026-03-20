@@ -13,6 +13,7 @@ import { listNotes } from './brain/index.js'
 import { startHeartbeat, stopHeartbeat } from './heartbeat.js'
 import { startScheduler, stopScheduler } from './scheduler.js'
 import { initMcp, shutdownMcp } from './mcp/client.js'
+import { startTelegram } from './channels/telegram.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -227,6 +228,14 @@ export async function startServer() {
   const broadcastFn = (sessionId: string, data: unknown) => broadcast(sessionId, data)
   startHeartbeat(broadcastFn)
   startScheduler(broadcastFn)
+
+  if (config.telegram?.token) {
+    startTelegram(
+      config.telegram.token,
+      config.telegram.allowedUsers ?? [],
+      broadcastFn
+    ).catch(err => log.error('[telegram] Failed to start', err.message))
+  }
 
   if (await isFirstRun()) {
     log.info('First run detected — creating onboarding session')
