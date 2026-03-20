@@ -39,6 +39,14 @@
         "name": "brave",
         "command": "npx -y @modelcontextprotocol/server-brave-search",
         "env": { "BRAVE_API_KEY": "your-key-here" }
+      },
+      {
+        "name": "puppeteer",
+        "command": "npx -y @modelcontextprotocol/server-puppeteer"
+      },
+      {
+        "name": "git",
+        "command": "uvx mcp-server-git"
       }
     ]
   }
