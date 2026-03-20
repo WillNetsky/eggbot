@@ -54,6 +54,24 @@ export async function* streamChat(
 
   log.debug(`[llm] → ${modelName}`, { tools: tools?.map(t => t.function.name), messages: messages.length })
 
+  // Ollama expects tool_call arguments as objects in message history, not strings.
+  const normalizedMessages = messages.map(msg => {
+    if (!msg.tool_calls?.length) return msg
+    return {
+      ...msg,
+      tool_calls: msg.tool_calls.map(tc => ({
+        ...tc,
+        function: {
+          ...tc.function,
+          arguments: typeof tc.function.arguments === 'string'
+            ? JSON.parse(tc.function.arguments)
+            : tc.function.arguments,
+        },
+      })),
+    }
+  })
+  body.messages = normalizedMessages
+
   const res = await fetch(`${config.ollama.host}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
