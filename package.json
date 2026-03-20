@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "reset": "rm -f ~/.eggbot/eggbot.db ~/.eggbot/brain-index.db && echo 'Reset: sessions + brain index cleared. Brain vault kept.'",
     "reset:hard": "rm -rf ~/.eggbot/eggbot.db ~/.eggbot/brain-index.db ~/.eggbot/brain ~/.eggbot/logs && echo 'Hard reset: all data cleared.'",
-    "kill": "lsof -ti :4444 | xargs kill -9 2>/dev/null || true",
+    "kill": "launchctl unload ~/Library/LaunchAgents/ai.eggbot.plist 2>/dev/null; lsof -ti :4444 | xargs kill -9 2>/dev/null; sleep 1; true",
     "restart": "npm run kill && npm run dev"
   },
   "dependencies": {
