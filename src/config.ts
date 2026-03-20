@@ -22,6 +22,8 @@ interface Config {
     maxWorkers: number
     maxIterations: number
     systemName: string
+    goalIntervalMinutes?: number
+    heartbeatIntervalMinutes?: number
   }
 }
 

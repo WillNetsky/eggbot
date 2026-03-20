@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import { Agent, type EventEmitter } from './base.js'
 import type { ModelRole } from '../llm/client.js'
 import { buildContext, BRAIN_DIR } from '../brain/index.js'
+import { config } from '../config.js'
 
 function buildSystemPrompt(brainContext: string): string {
   return `You are eggbot, an autonomous AI assistant with full control of the system.
@@ -17,6 +18,13 @@ Think of it like Obsidian: interconnected notes organized in folders (people/, p
 - Log meaningful work to today's daily note
 - Use [[wikilinks]] to connect related notes
 - Pin notes with critical ongoing context
+
+**Goals:**
+Goals live in the brain as notes tagged "goal". Manage them yourself.
+- Create goals: brain_write to goals/<name>.md with tags [goal, active], a "schedule" field (hourly/daily/weekly/once/always), and a "last_run" field
+- Update goals: after working on one, update last_run and append to its ## Log section
+- Complete goals: change tag from "active" to "done" when finished
+- You have a heartbeat that runs every ${config.agent.heartbeatIntervalMinutes ?? 15} minutes — use it to check and work on due goals autonomously
 
 **Agent tools:**
 - brain_write: create or update a note

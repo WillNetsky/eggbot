@@ -10,6 +10,8 @@ import { Orchestrator } from './agents/orchestrator.js'
 import type { AgentEvent } from './agents/base.js'
 import log, { type LogEntry } from './logger.js'
 import { listNotes } from './brain/index.js'
+import { startHeartbeat, stopHeartbeat } from './heartbeat.js'
+import { startScheduler, stopScheduler } from './scheduler.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -215,6 +217,10 @@ export async function startServer() {
   await app.listen({ port: config.server.port, host: config.server.host })
   log.info(`eggbot running at http://localhost:${config.server.port}`)
   console.log(`eggbot running at http://localhost:${config.server.port}`)
+
+  const broadcastFn = (sessionId: string, data: unknown) => broadcast(sessionId, data)
+  startHeartbeat(broadcastFn)
+  startScheduler(broadcastFn)
 
   if (await isFirstRun()) {
     log.info('First run detected — creating onboarding session')
