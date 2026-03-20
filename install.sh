@@ -45,14 +45,82 @@ npm run build --silent
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
+mkdir -p "$DATA_DIR"
+
+configure() {
+  echo ""
+  echo -e "  ${BOLD}Configure eggbot${NC}"
+  echo ""
+
+  # Ollama host
+  read -r -p "  Ollama host [http://localhost:11434]: " OLLAMA_HOST
+  OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+
+  # Test connectivity
+  printf "  Testing Ollama connection... "
+  if curl -sf "${OLLAMA_HOST}/api/tags" -o /dev/null 2>/dev/null; then
+    echo -e "${GREEN}✓ connected${NC}"
+
+    # List available models
+    MODELS=$(curl -sf "${OLLAMA_HOST}/api/tags" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | head -20 || true)
+    if [ -n "$MODELS" ]; then
+      echo ""
+      echo -e "  Available models:"
+      echo "$MODELS" | while read -r m; do echo "    - $m"; done
+      echo ""
+    fi
+  else
+    echo -e "${YELLOW}⚠ could not reach Ollama${NC} (continuing anyway — check host/port later)"
+  fi
+
+  # Model selection
+  echo -e "  Model routing ${CYAN}(press Enter to keep default)${NC}:"
+  read -r -p "  Orchestrator / general    [qwen2.5:14b]: "        M_ORCH;  M_ORCH="${M_ORCH:-qwen2.5:14b}"
+  read -r -p "  Coder                     [qwen2.5-coder:14b]: "  M_CODER; M_CODER="${M_CODER:-qwen2.5-coder:14b}"
+  read -r -p "  Fast / lightweight        [qwen2.5:7b]: "          M_FAST;  M_FAST="${M_FAST:-qwen2.5:7b}"
+  read -r -p "  Reasoning                 [deepseek-r1:8b]: "      M_REAS;  M_REAS="${M_REAS:-deepseek-r1:8b}"
+
+  # Server port
+  read -r -p "  Web UI port               [4444]: " PORT
+  PORT="${PORT:-4444}"
+
+  # Write config
+  cat > "$EGGBOT_DIR/eggbot.json" <<EOF
+{
+  "ollama": {
+    "host": "$OLLAMA_HOST",
+    "models": {
+      "orchestrator": "$M_ORCH",
+      "coder": "$M_CODER",
+      "fast": "$M_FAST",
+      "reasoning": "$M_REAS"
+    }
+  },
+  "server": {
+    "port": $PORT,
+    "host": "0.0.0.0"
+  },
+  "agent": {
+    "maxWorkers": 8,
+    "maxIterations": 50,
+    "systemName": "eggbot"
+  }
+}
+EOF
+
+  echo ""
+  echo -e "${GREEN}✓${NC} Config written to eggbot.json"
+}
+
 if [ ! -f "$EGGBOT_DIR/eggbot.json" ]; then
-  cp "$EGGBOT_DIR/eggbot.example.json" "$EGGBOT_DIR/eggbot.json"
-  echo -e "${YELLOW}⚠${NC}  Created eggbot.json from example — set your Ollama host before starting."
+  configure
 else
   echo -e "${GREEN}✓${NC} eggbot.json already exists"
+  read -r -p "  Reconfigure? [y/N] " ans
+  if [[ "$ans" =~ ^[Yy]$ ]]; then
+    configure
+  fi
 fi
-
-mkdir -p "$DATA_DIR"
 
 # ── Daemon setup ─────────────────────────────────────────────────────────────
 
@@ -168,5 +236,4 @@ echo -e "  Config: ${CYAN}$EGGBOT_DIR/eggbot.json${NC}"
 echo -e "  Data:   ${CYAN}$DATA_DIR/${NC}"
 echo -e "  Web UI: ${CYAN}http://localhost:4444${NC}"
 echo ""
-echo -e "  ${YELLOW}${BOLD}Next step:${NC} Edit eggbot.json and set your Ollama host."
 echo ""
