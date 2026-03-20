@@ -25,24 +25,24 @@
 
       <div id="messages"></div>
 
+      <div id="debug-panel" class="hidden">
+        <div id="debug-header">
+          <span>debug log</span>
+          <label><input type="checkbox" id="debug-filter-debug" checked> debug</label>
+          <label><input type="checkbox" id="debug-filter-info" checked> info</label>
+          <label><input type="checkbox" id="debug-filter-warn" checked> warn</label>
+          <label><input type="checkbox" id="debug-filter-error" checked> error</label>
+          <button id="debug-clear">clear</button>
+          <button id="debug-close">✕</button>
+        </div>
+        <div id="debug-log"></div>
+      </div>
+
       <div id="input-area">
         <textarea id="input" placeholder="Tell eggbot what to do..." rows="3"></textarea>
         <button id="send-btn">Send</button>
       </div>
     </main>
-  </div>
-
-  <div id="debug-panel" class="hidden">
-    <div id="debug-header">
-      <span>debug log</span>
-      <label><input type="checkbox" id="debug-filter-debug" checked> debug</label>
-      <label><input type="checkbox" id="debug-filter-info" checked> info</label>
-      <label><input type="checkbox" id="debug-filter-warn" checked> warn</label>
-      <label><input type="checkbox" id="debug-filter-error" checked> error</label>
-      <button id="debug-clear">clear</button>
-      <button id="debug-close">✕</button>
-    </div>
-    <div id="debug-log"></div>
   </div>
 
   <script src="/app.js"></script>
