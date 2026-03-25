@@ -94,13 +94,13 @@ const TOOL_ICONS = {
   set_session_goal: '🎯',
 }
 
-function getOrCreateAgent(agentId, agentName) {
+function getOrCreateAgent(agentId, agentName, model) {
   if (actAgents.has(agentId)) return actAgents.get(agentId)
 
   // Agent header
   const startEl = document.createElement('div')
   startEl.className = 'act-agent-start'
-  startEl.textContent = agentName
+  startEl.textContent = model ? `${agentName} (${model})` : agentName
   activityLog.appendChild(startEl)
 
   // Thinking block
@@ -114,11 +114,11 @@ function getOrCreateAgent(agentId, agentName) {
 }
 
 function handleAgentEvent(event) {
-  const { type, agentId, agentName } = event
+  const { type, agentId, agentName, model } = event
 
   switch (type) {
     case 'thinking': {
-      const agent = getOrCreateAgent(agentId, agentName)
+      const agent = getOrCreateAgent(agentId, agentName, model)
       const cursor = agent.thinkingEl.querySelector('.cursor')
       if (cursor) cursor.remove()
       agent.thinkingEl.appendChild(document.createTextNode(event.delta))
@@ -130,7 +130,7 @@ function handleAgentEvent(event) {
     }
 
     case 'tool_call': {
-      const agent = getOrCreateAgent(agentId, agentName)
+      const agent = getOrCreateAgent(agentId, agentName, model)
 
       // Remove cursor from thinking
       const cursor = agent.thinkingEl.querySelector('.cursor')

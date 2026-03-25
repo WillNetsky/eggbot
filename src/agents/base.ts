@@ -5,13 +5,13 @@ import { config } from '../config.js'
 import { agentRuns } from '../store/db.js'
 
 export type AgentEvent =
-  | { type: 'thinking'; agentId: string; agentName: string; delta: string }
-  | { type: 'tool_call'; agentId: string; agentName: string; tool: string; args: Record<string, string> }
-  | { type: 'tool_result'; agentId: string; agentName: string; tool: string; success: boolean; output: string }
-  | { type: 'done'; agentId: string; agentName: string; result: string }
-  | { type: 'error'; agentId: string; agentName: string; message: string }
-  | { type: 'spawn'; agentId: string; agentName: string; childId: string; childName: string }
-  | { type: 'injected'; agentId: string; agentName: string; message: string }
+  | { type: 'thinking'; agentId: string; agentName: string; model: string; delta: string }
+  | { type: 'tool_call'; agentId: string; agentName: string; model: string; tool: string; args: Record<string, string> }
+  | { type: 'tool_result'; agentId: string; agentName: string; model: string; tool: string; success: boolean; output: string }
+  | { type: 'done'; agentId: string; agentName: string; model: string; result: string }
+  | { type: 'error'; agentId: string; agentName: string; model: string; message: string }
+  | { type: 'spawn'; agentId: string; agentName: string; model: string; childId: string; childName: string }
+  | { type: 'injected'; agentId: string; agentName: string; model: string; message: string }
 
 export type EventEmitter = (event: AgentEvent) => void
 
@@ -19,6 +19,7 @@ export class Agent {
   readonly id: string
   readonly name: string
   readonly model: ModelRole
+  readonly modelName: string
   readonly sessionId: string
   private messages: Message[]
   private emit: EventEmitter
@@ -42,6 +43,7 @@ export class Agent {
     this.id = opts.id ?? randomUUID()
     this.name = opts.name
     this.model = opts.model
+    this.modelName = config.ollama.models[opts.model]
     this.sessionId = opts.sessionId
     this.emit = opts.emit
     this.spawnAgent = opts.spawnAgent
@@ -85,7 +87,7 @@ export class Agent {
       while (this.pendingInjections.length > 0) {
         const injection = this.pendingInjections.shift()!
         this.messages.push({ role: 'user', content: `[User interjection]: ${injection}` })
-        this.emit({ type: 'injected', agentId: this.id, agentName: this.name, message: injection })
+        this.emit({ type: 'injected', agentId: this.id, agentName: this.name, model: this.modelName, message: injection })
       }
 
       let thinkingText = ''
@@ -94,7 +96,7 @@ export class Agent {
       for await (const chunk of streamChat(this.model, this.messages, getTools(), this.abortController.signal)) {
         if (chunk.type === 'text') {
           thinkingText += chunk.delta
-          this.emit({ type: 'thinking', agentId: this.id, agentName: this.name, delta: chunk.delta })
+          this.emit({ type: 'thinking', agentId: this.id, agentName: this.name, model: this.modelName, delta: chunk.delta })
         }
 
         if (chunk.type === 'tool_calls') {
@@ -127,7 +129,7 @@ export class Agent {
               args,
               async (name, task, model) => {
                 const child = this.spawnAgent(name, task, model as ModelRole, this.id)
-                this.emit({ type: 'spawn', agentId: this.id, agentName: this.name, childId: child.id, childName: child.name })
+                this.emit({ type: 'spawn', agentId: this.id, agentName: this.name, model: this.modelName, childId: child.id, childName: child.name })
                 const resultPromise = child.run(task)
                 this.childAgents.set(child.id, resultPromise)
                 return child.id
@@ -173,7 +175,7 @@ export class Agent {
             this.messages.push({ role: 'assistant', content: thinkingText })
           }
           agentRuns.complete(this.id, 'done')
-          this.emit({ type: 'done', agentId: this.id, agentName: this.name, result: thinkingText })
+          this.emit({ type: 'done', agentId: this.id, agentName: this.name, model: this.modelName, result: thinkingText })
           return thinkingText
         }
       }
@@ -182,14 +184,14 @@ export class Agent {
       const last = this.messages[this.messages.length - 1]
       if (last.role === 'assistant' && !last.tool_calls?.length) {
         agentRuns.complete(this.id, 'done')
-        this.emit({ type: 'done', agentId: this.id, agentName: this.name, result: last.content })
+        this.emit({ type: 'done', agentId: this.id, agentName: this.name, model: this.modelName, result: last.content })
         return last.content
       }
     }
 
     const finalMsg = 'Max iterations reached.'
     agentRuns.complete(this.id, 'done')
-    this.emit({ type: 'done', agentId: this.id, agentName: this.name, result: finalMsg })
+    this.emit({ type: 'done', agentId: this.id, agentName: this.name, model: this.modelName, result: finalMsg })
     return finalMsg
   }
 }
