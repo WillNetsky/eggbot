@@ -11,6 +11,7 @@ import { sessions, messages } from '../store/db.js'
 import { randomUUID } from 'crypto'
 import log from '../logger.js'
 import type { AgentEvent } from '../agents/base.js'
+import { runGoals } from '../scheduler.js'
 
 type Broadcast = (sessionId: string, data: unknown) => void
 
@@ -87,6 +88,12 @@ export async function startTelegram(token: string, allowedUsers: number[], broad
   bot.command('status', async (ctx) => {
     const sessionId = chatSessions.get(ctx.chat.id)
     await ctx.reply(sessionId ? `Session: ${sessionId.slice(0, 8)}…` : 'No active session.')
+  })
+
+  // /run — trigger goal loop manually
+  bot.command('run', async (ctx) => {
+    await ctx.reply('Running goals now...')
+    runGoals(broadcast)
   })
 
   // Handle all text messages

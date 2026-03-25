@@ -12,7 +12,7 @@ import type { AgentEvent } from './agents/base.js'
 import log, { type LogEntry } from './logger.js'
 import { listNotes } from './brain/index.js'
 import { startHeartbeat, stopHeartbeat } from './heartbeat.js'
-import { startScheduler, stopScheduler } from './scheduler.js'
+import { startScheduler, stopScheduler, runGoals } from './scheduler.js'
 import { initMcp, shutdownMcp } from './mcp/client.js'
 import { startTelegram } from './channels/telegram.js'
 
@@ -88,6 +88,12 @@ function runMessage(sessionId: string, content: string, isFirstMessage: boolean)
     activeOrchestrators.delete(sessionId)
   })
 }
+
+// REST: trigger goal loop manually
+app.post('/api/goals/run', async () => {
+  runGoals(broadcast)
+  return { ok: true, message: 'Goal run triggered' }
+})
 
 // REST: recent logs
 app.get('/api/logs', async () => logBuffer)
