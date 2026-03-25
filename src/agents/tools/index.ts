@@ -3,6 +3,7 @@ import { promisify } from 'util'
 import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises'
 import { join, dirname } from 'path'
 import { homedir } from 'os'
+import { randomUUID } from 'crypto'
 import type { Tool } from '../../llm/client.js'
 import {
   writeNote, readNote, searchNotes, searchByTag, listNotes,
@@ -10,6 +11,7 @@ import {
 } from '../../brain/index.js'
 import log from '../../logger.js'
 import { getMcpTools, callMcpTool, isMcpTool } from '../../mcp/client.js'
+import { todos } from '../../store/db.js'
 
 const execAsync = promisify(exec)
 
@@ -171,9 +173,23 @@ const BUILTIN_TOOLS: Tool[] = [
       parameters: {
         type: 'object',
         properties: {
-          folder: { type: 'string', description: 'Subfolder to list, e.g. "people", "projects", "daily", "knowledge". Omit for all.', enum: ['people', 'projects', 'daily', 'knowledge'] },
+          folder: { type: 'string', description: 'Subfolder to list, e.g. "people", "projects", "daily", "knowledge", "goals". Omit for all.', enum: ['people', 'projects', 'daily', 'knowledge', 'goals'] },
         },
         required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_session_goal',
+      description: 'Link this conversation thread to a goal brain note. Call this once per conversation after creating or identifying the goal for this session. This makes the conversation show up as that goal\'s dedicated thread.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Brain note path for the goal, e.g. "goals/my-project.md"' },
+        },
+        required: ['path'],
       },
     },
   },
@@ -188,6 +204,54 @@ const BUILTIN_TOOLS: Tool[] = [
           append: { type: 'string', description: 'Text to append to today\'s daily note (optional — omit to just read it)' },
         },
         required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'todo_list',
+      description: 'List todos from the persistent todo list. Optionally filter by status.',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', description: 'Filter by status: todo, in_progress, done. Omit for all.', enum: ['todo', 'in_progress', 'done'] },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'todo_add',
+      description: 'Add a new item to the persistent todo list',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'The todo item title' },
+          priority: { type: 'string', description: 'Priority: 0=normal, 1=high (default 0)' },
+          notes: { type: 'string', description: 'Optional notes or details' },
+        },
+        required: ['title'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'todo_update',
+      description: 'Update a todo item — mark it done/in_progress, change title, add notes, etc.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The todo ID' },
+          status: { type: 'string', description: 'New status: todo, in_progress, done', enum: ['todo', 'in_progress', 'done'] },
+          title: { type: 'string', description: 'New title (optional)' },
+          notes: { type: 'string', description: 'Updated notes (optional)' },
+          priority: { type: 'string', description: 'New priority: 0=normal, 1=high (optional)' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -216,7 +280,8 @@ export async function executeTool(
   name: string,
   args: Record<string, string>,
   spawnAgent: (name: string, task: string, model: string) => Promise<string>,
-  waitForAgents: (ids: string[]) => Promise<Record<string, string>>
+  waitForAgents: (ids: string[]) => Promise<Record<string, string>>,
+  setGoalRef?: (path: string) => void
 ): Promise<ToolResult> {
   log.debug(`[tool] ${name}`, args)
   try {
@@ -307,6 +372,33 @@ export async function executeTool(
         return { success: true, output: note.body || '(empty)' }
       }
 
+      case 'todo_list': {
+        const items = todos.list(args.status as 'todo' | 'in_progress' | 'done' | undefined)
+        if (!items.length) return { success: true, output: 'No todos found' }
+        return {
+          success: true,
+          output: items.map(t =>
+            `[${t.id}] [${t.status}] ${t.priority ? '⚡ ' : ''}${t.title}${t.notes ? `\n  notes: ${t.notes}` : ''}`
+          ).join('\n'),
+        }
+      }
+
+      case 'todo_add': {
+        const todo = todos.create(randomUUID(), args.title, parseInt(args.priority ?? '0'), args.notes)
+        return { success: true, output: `Todo created: [${todo.id}] ${todo.title}` }
+      }
+
+      case 'todo_update': {
+        const updated = todos.update(args.id, {
+          status: args.status as 'todo' | 'in_progress' | 'done' | undefined,
+          title: args.title,
+          notes: args.notes,
+          priority: args.priority !== undefined ? parseInt(args.priority) : undefined,
+        })
+        if (!updated) return { success: false, output: `Todo not found: ${args.id}` }
+        return { success: true, output: `Updated: [${updated.id}] [${updated.status}] ${updated.title}` }
+      }
+
       case 'spawn_agent': {
         const agentId = await spawnAgent(args.name, args.task, args.model)
         return { success: true, output: `Agent spawned: ${agentId}` }
@@ -321,6 +413,14 @@ export async function executeTool(
             .map(([id, result]) => `[${id}]\n${result}`)
             .join('\n\n'),
         }
+      }
+
+      case 'set_session_goal': {
+        if (setGoalRef) {
+          setGoalRef(args.path)
+          return { success: true, output: `Session linked to goal: ${args.path}` }
+        }
+        return { success: false, output: 'set_session_goal not available in this context' }
       }
 
       default: {

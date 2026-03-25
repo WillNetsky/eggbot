@@ -5,8 +5,9 @@ import { randomUUID } from 'crypto'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from './config.js'
-import { sessions, messages } from './store/db.js'
+import { sessions, messages, todos } from './store/db.js'
 import { Orchestrator } from './agents/orchestrator.js'
+import { chat } from './llm/client.js'
 import type { AgentEvent } from './agents/base.js'
 import log, { type LogEntry } from './logger.js'
 import { listNotes } from './brain/index.js'
@@ -52,6 +53,42 @@ function broadcast(sessionId: string, data: unknown) {
   }
 }
 
+function runMessage(sessionId: string, content: string, isFirstMessage: boolean) {
+  const orchestrator = new Orchestrator(sessionId, (event: AgentEvent) => {
+    broadcast(sessionId, { type: 'agent_event', event })
+  })
+  activeOrchestrators.set(sessionId, orchestrator)
+
+  orchestrator.handleMessage(content).then((result) => {
+    const assistantMsg = {
+      id: randomUUID(),
+      session_id: sessionId,
+      role: 'assistant',
+      content: result,
+      agent_id: null,
+      agent_name: 'boss',
+      metadata: null,
+    }
+    messages.insert(assistantMsg)
+    sessions.touch(sessionId)
+    broadcast(sessionId, { type: 'message', message: assistantMsg })
+    activeOrchestrators.delete(sessionId)
+
+    if (isFirstMessage) {
+      chat('fast', [
+        { role: 'user', content: `Summarize this conversation's goal as a short title (4-6 words, no punctuation, no quotes):\nUser: ${content}\nAssistant: ${result.slice(0, 300)}` }
+      ]).then(({ content: title }) => {
+        const clean = title.trim().replace(/^["']|["']$/g, '').slice(0, 60)
+        sessions.updateTitle(sessionId, clean)
+        broadcast(sessionId, { type: 'session_renamed', sessionId, title: clean })
+      }).catch(() => {})
+    }
+  }).catch((err) => {
+    broadcast(sessionId, { type: 'error', message: err.message })
+    activeOrchestrators.delete(sessionId)
+  })
+}
+
 // REST: recent logs
 app.get('/api/logs', async () => logBuffer)
 
@@ -68,7 +105,21 @@ app.get<{ Params: { id: string } }>('/api/sessions/:id/messages', async (req) =>
 // REST: create session
 app.post('/api/sessions', async () => {
   const id = randomUUID()
-  return sessions.create(id)
+  return sessions.create(id, undefined, 'goal')
+})
+
+// REST: todos
+app.get('/api/todos', async () => todos.list())
+app.post<{ Body: { title: string; priority?: number; notes?: string } }>('/api/todos', async (req) => {
+  const { title, priority, notes } = req.body
+  return todos.create(randomUUID(), title, priority ?? 0, notes)
+})
+app.patch<{ Params: { id: string }; Body: { title?: string; status?: 'todo' | 'in_progress' | 'done'; priority?: number; notes?: string } }>('/api/todos/:id', async (req) => {
+  return todos.update(req.params.id, req.body)
+})
+app.delete<{ Params: { id: string } }>('/api/todos/:id', async (req) => {
+  todos.delete(req.params.id)
+  return { ok: true }
 })
 
 // WebSocket: main comms channel
@@ -100,7 +151,7 @@ app.register(async (fastify) => {
           ?? randomUUID()
 
         if (!sessions.get(sessionId)) {
-          sessions.create(sessionId)
+          sessions.create(sessionId, undefined, 'goal')
         }
 
         currentSessionId = sessionId
@@ -140,44 +191,17 @@ app.register(async (fastify) => {
         messages.insert(userMsg)
         sessions.touch(sessionId)
 
-        // Auto-title session from first message
-        const existing = messages.list(sessionId)
-        if (existing.length <= 1) {
-          const title = content.length > 60 ? content.slice(0, 57) + '...' : content
-          sessions.updateTitle(sessionId, title)
-        }
+        const isFirstMessage = messages.list(sessionId).length <= 1
 
         broadcast(sessionId, { type: 'message', message: userMsg })
 
-        // Abort any existing run for this session
-        activeOrchestrators.get(sessionId)?.abortAll()
+        // If already running, inject into the active agent
+        if (activeOrchestrators.has(sessionId)) {
+          activeOrchestrators.get(sessionId)!.inject(content)
+          return
+        }
 
-        // Create orchestrator
-        const orchestrator = new Orchestrator(sessionId, (event: AgentEvent) => {
-          broadcast(sessionId, { type: 'agent_event', event })
-        })
-        activeOrchestrators.set(sessionId, orchestrator)
-
-        // Run async
-        orchestrator.handleMessage(content).then((result) => {
-          // Save assistant message
-          const assistantMsg = {
-            id: randomUUID(),
-            session_id: sessionId,
-            role: 'assistant',
-            content: result,
-            agent_id: null,
-            agent_name: 'boss',
-            metadata: null,
-          }
-          messages.insert(assistantMsg)
-          sessions.touch(sessionId)
-          broadcast(sessionId, { type: 'message', message: assistantMsg })
-          activeOrchestrators.delete(sessionId)
-        }).catch((err) => {
-          broadcast(sessionId, { type: 'error', message: err.message })
-          activeOrchestrators.delete(sessionId)
-        })
+        runMessage(sessionId, content, isFirstMessage)
 
         return
       }
@@ -240,7 +264,7 @@ export async function startServer() {
   if (await isFirstRun()) {
     log.info('First run detected — creating onboarding session')
     const sessionId = randomUUID()
-    sessions.create(sessionId, 'Getting started')
+    sessions.create(sessionId, 'Getting started', 'goal')
     messages.insert({
       id: randomUUID(),
       session_id: sessionId,

@@ -6,19 +6,6 @@ let ws = null
 let currentSessionId = null
 let isRunning = false
 
-// Agent color palette (cycles)
-const AGENT_COLORS = ['#5ce8e8', '#ff9f43', '#3ddc84', '#ff6eb4', '#a29bfe', '#fd79a8', '#fdcb6e', '#e17055']
-const agentColors = new Map()
-let colorIndex = 0
-
-function getAgentColor(name) {
-  if (!agentColors.has(name)) {
-    agentColors.set(name, AGENT_COLORS[colorIndex % AGENT_COLORS.length])
-    colorIndex++
-  }
-  return agentColors.get(name)
-}
-
 // DOM refs
 const messagesEl = document.getElementById('messages')
 const inputEl = document.getElementById('input')
@@ -27,47 +14,39 @@ const abortBtn = document.getElementById('abort-btn')
 const sessionsList = document.getElementById('sessions-list')
 const sessionTitle = document.getElementById('session-title')
 const newChatBtn = document.getElementById('new-chat-btn')
+const activityPanel = document.getElementById('activity-panel')
+const activityLog = document.getElementById('activity-log')
+const activityBtn = document.getElementById('activity-btn')
+const activityDot = document.getElementById('activity-dot')
+const activityLabel = document.getElementById('activity-label')
 
-// Active agent blocks during a run
-const agentBlocks = new Map() // agentId -> { blockEl, bodyEl, thinkingEl, status }
+// Per-agent activity state
+const actAgents = new Map() // agentId -> { thinkingEl, pendingToolEl }
 
 // Connect WebSocket
 function connect() {
   ws = new WebSocket(WS_URL)
 
   ws.onopen = () => {
-    console.log('Connected to eggbot')
-    // Join or create session
     ws.send(JSON.stringify({ type: 'join', session_id: currentSessionId }))
   }
 
   ws.onmessage = (e) => {
-    const data = JSON.parse(e.data)
-    handleWsMessage(data)
+    handleWsMessage(JSON.parse(e.data))
   }
 
-  ws.onclose = () => {
-    console.log('Disconnected, reconnecting in 2s...')
-    setTimeout(connect, 2000)
-  }
-
-  ws.onerror = (err) => {
-    console.error('WS error:', err)
-  }
+  ws.onclose = () => setTimeout(connect, 2000)
+  ws.onerror = () => {}
 }
 
 function handleWsMessage(data) {
   switch (data.type) {
     case 'joined':
       currentSessionId = data.session_id
-      // Render existing messages
       messagesEl.innerHTML = ''
-      agentBlocks.clear()
-      agentColors.clear()
-      colorIndex = 0
-      for (const msg of data.messages) {
-        renderMessage(msg)
-      }
+      activityLog.innerHTML = ''
+      actAgents.clear()
+      for (const msg of data.messages) renderMessage(msg)
       scrollToBottom()
       loadSessions()
       break
@@ -77,32 +56,61 @@ function handleWsMessage(data) {
       scrollToBottom()
       if (data.message.role === 'assistant') {
         setRunning(false)
+        loadTodos()
       }
       break
 
     case 'agent_event':
       handleAgentEvent(data.event)
-      scrollToBottom()
       break
+
+    case 'session_renamed': {
+      const item = [...sessionsList.querySelectorAll('.session-item')].find(
+        el => el.dataset.sessionId === data.sessionId
+      )
+      if (item) item.textContent = data.title
+      if (data.sessionId === currentSessionId) sessionTitle.textContent = data.title
+      break
+    }
 
     case 'aborted':
       setRunning(false)
-      appendSystemMessage('Run aborted.')
+      appendActivityNote('— aborted —', 'var(--red)')
       break
 
     case 'error':
       setRunning(false)
-      appendSystemMessage(`Error: ${data.message}`, true)
-      break
-
-    case 'log':
-      appendLog(data.entry)
-      break
-
-    case 'log_history':
-      for (const entry of data.entries) appendLog(entry)
+      appendActivityNote(`error: ${data.message}`, 'var(--red)')
       break
   }
+}
+
+// ─── Activity panel ───────────────────────────────────────────────────────────
+
+const TOOL_ICONS = {
+  bash: '⚡', read_file: '📖', write_file: '✏️', list_dir: '📁',
+  fetch_url: '🌐', spawn_agent: '🤖', wait_for_agents: '⏳',
+  brain_write: '🧠', brain_read: '🧠', brain_search: '🔍', brain_list: '📋', brain_daily: '📅',
+  set_session_goal: '🎯',
+}
+
+function getOrCreateAgent(agentId, agentName) {
+  if (actAgents.has(agentId)) return actAgents.get(agentId)
+
+  // Agent header
+  const startEl = document.createElement('div')
+  startEl.className = 'act-agent-start'
+  startEl.textContent = agentName
+  activityLog.appendChild(startEl)
+
+  // Thinking block
+  const thinkingEl = document.createElement('div')
+  thinkingEl.className = 'act-thinking'
+  activityLog.appendChild(thinkingEl)
+
+  const agent = { thinkingEl, pendingToolEl: null }
+  actAgents.set(agentId, agent)
+  return agent
 }
 
 function handleAgentEvent(event) {
@@ -110,182 +118,146 @@ function handleAgentEvent(event) {
 
   switch (type) {
     case 'thinking': {
-      let block = agentBlocks.get(agentId)
-      if (!block) {
-        block = createAgentBlock(agentId, agentName)
-      }
-      // Append text to thinking stream
-      const cursor = block.thinkingEl.querySelector('.cursor')
+      const agent = getOrCreateAgent(agentId, agentName)
+      const cursor = agent.thinkingEl.querySelector('.cursor')
       if (cursor) cursor.remove()
-
-      block.thinkingEl.appendChild(document.createTextNode(event.delta))
-
-      // Re-add cursor
+      agent.thinkingEl.appendChild(document.createTextNode(event.delta))
       const cur = document.createElement('span')
       cur.className = 'cursor'
-      block.thinkingEl.appendChild(cur)
+      agent.thinkingEl.appendChild(cur)
+      activityScrollToBottom()
       break
     }
 
     case 'tool_call': {
-      let block = agentBlocks.get(agentId)
-      if (!block) block = createAgentBlock(agentId, agentName)
+      const agent = getOrCreateAgent(agentId, agentName)
 
-      // Remove cursor if present
-      const cursor = block.thinkingEl.querySelector('.cursor')
+      // Remove cursor from thinking
+      const cursor = agent.thinkingEl.querySelector('.cursor')
       if (cursor) cursor.remove()
 
-      const toolEl = createToolCall(event.tool, event.args)
-      block.bodyEl.appendChild(toolEl)
-      block.pendingToolEl = toolEl
+      // Build args preview
+      let argsLine = ''
+      const a = event.args
+      if (event.tool === 'bash' && a.command) {
+        argsLine = `$ ${a.command.length > 200 ? a.command.slice(0, 197) + '…' : a.command}`
+      } else if (a.path) {
+        argsLine = a.path
+      } else if (a.url) {
+        argsLine = a.url
+      } else if (a.query) {
+        argsLine = a.query
+      } else if (a.name) {
+        argsLine = `${a.name}${a.model ? ' (' + a.model + ')' : ''}`
+      } else {
+        const entries = Object.entries(a)
+        argsLine = entries.map(([k, v]) => `${k}: ${String(v).slice(0, 60)}`).join('  ')
+      }
+
+      const toolEl = document.createElement('div')
+      toolEl.className = 'act-tool'
+      toolEl.innerHTML = `
+        <div class="act-tool-header">
+          <span>${TOOL_ICONS[event.tool] ?? '🔧'}</span>
+          <span>${escapeHtml(event.tool)}</span>
+          <span class="act-tool-status running">running</span>
+        </div>
+        <div class="act-tool-args">${escapeHtml(argsLine)}</div>
+        <div class="act-tool-result collapsed"></div>
+      `
+      // Toggle result on click
+      toolEl.querySelector('.act-tool-header').addEventListener('click', () => {
+        toolEl.querySelector('.act-tool-result').classList.toggle('collapsed')
+      })
+
+      activityLog.appendChild(toolEl)
+      agent.pendingToolEl = toolEl
+      activityScrollToBottom()
       break
     }
 
     case 'tool_result': {
-      const block = agentBlocks.get(agentId)
-      if (!block?.pendingToolEl) break
+      const agent = actAgents.get(agentId)
+      if (!agent?.pendingToolEl) break
+      const toolEl = agent.pendingToolEl
+      const statusEl = toolEl.querySelector('.act-tool-status')
+      const resultEl = toolEl.querySelector('.act-tool-result')
 
-      const statusEl = block.pendingToolEl.querySelector('.tool-status')
-      const resultEl = block.pendingToolEl.querySelector('.tool-result')
+      statusEl.textContent = event.success ? '✓' : '✗'
+      statusEl.className = `act-tool-status ${event.success ? 'ok' : 'err'}`
 
-      if (statusEl) {
-        statusEl.textContent = event.success ? '✓' : '✗'
-        statusEl.className = `tool-status ${event.success ? 'ok' : 'err'}`
-      }
-      if (resultEl) {
-        resultEl.textContent = event.output
-        resultEl.className = `tool-result ${event.success ? 'ok' : 'err'}`
-      }
+      const out = event.output ?? ''
+      resultEl.textContent = out.length > 800 ? out.slice(0, 797) + '…' : out
+      resultEl.className = `act-tool-result${event.success ? '' : ' err'}`
+      // Auto-expand errors
+      if (!event.success) resultEl.classList.remove('collapsed')
 
-      block.pendingToolEl = null
+      agent.pendingToolEl = null
+      activityScrollToBottom()
       break
     }
 
     case 'spawn': {
-      const block = agentBlocks.get(agentId)
-      if (block) {
-        const spawnEl = document.createElement('div')
-        spawnEl.className = 'spawn-event'
-        spawnEl.innerHTML = `↳ spawning <span style="color:${getAgentColor(event.childName)}">${event.childName}</span>`
-        block.bodyEl.appendChild(spawnEl)
-      }
+      const el = document.createElement('div')
+      el.className = 'act-spawn'
+      el.textContent = `↳ spawning ${event.childName}`
+      activityLog.appendChild(el)
+      activityScrollToBottom()
+      break
+    }
+
+    case 'injected': {
+      const el = document.createElement('div')
+      el.className = 'act-inject'
+      el.textContent = `↩ ${event.message}`
+      activityLog.appendChild(el)
+      activityScrollToBottom()
       break
     }
 
     case 'done': {
-      const block = agentBlocks.get(agentId)
-      if (block) {
-        const cursor = block.thinkingEl.querySelector('.cursor')
+      const agent = actAgents.get(agentId)
+      if (agent) {
+        const cursor = agent.thinkingEl.querySelector('.cursor')
         if (cursor) cursor.remove()
-        block.dotEl.className = 'agent-dot done'
-        block.status = 'done'
+        const doneEl = document.createElement('div')
+        doneEl.className = 'act-done'
+        doneEl.textContent = `✓ ${agentName} done`
+        activityLog.appendChild(doneEl)
+        activityScrollToBottom()
       }
       break
     }
 
     case 'error': {
-      const block = agentBlocks.get(agentId)
-      if (block) {
-        block.dotEl.className = 'agent-dot error'
-        block.status = 'error'
-        const errEl = document.createElement('div')
-        errEl.style.color = 'var(--red)'
-        errEl.textContent = `Error: ${event.message}`
-        block.bodyEl.appendChild(errEl)
-      }
+      appendActivityNote(`✗ ${agentName}: ${event.message}`, 'var(--red)')
       break
     }
   }
 }
 
-function createAgentBlock(agentId, agentName) {
-  const color = getAgentColor(agentName)
-
-  const blockEl = document.createElement('div')
-  blockEl.className = 'agent-block'
-
-  const header = document.createElement('div')
-  header.className = 'agent-header'
-  header.innerHTML = `
-    <span class="agent-dot running"></span>
-    <span class="agent-name" style="color:${color}">${agentName}</span>
-    <span class="agent-toggle" style="font-size:10px;color:var(--text-muted);margin-left:auto">▾</span>
-  `
-
-  const bodyEl = document.createElement('div')
-  bodyEl.className = 'agent-body'
-
-  const thinkingEl = document.createElement('div')
-  thinkingEl.className = 'thinking-stream'
-  bodyEl.appendChild(thinkingEl)
-
-  // Toggle collapse
-  header.addEventListener('click', () => {
-    const isCollapsed = bodyEl.classList.toggle('collapsed')
-    header.querySelector('.agent-toggle').textContent = isCollapsed ? '▸' : '▾'
-  })
-
-  blockEl.appendChild(header)
-  blockEl.appendChild(bodyEl)
-  messagesEl.appendChild(blockEl)
-
-  const dotEl = header.querySelector('.agent-dot')
-  const block = { blockEl, bodyEl, thinkingEl, dotEl, status: 'running', pendingToolEl: null }
-  agentBlocks.set(agentId, block)
-  return block
-}
-
-function createToolCall(toolName, args) {
+function appendActivityNote(text, color = 'var(--text-muted)') {
   const el = document.createElement('div')
-  el.className = 'tool-call'
-
-  const toolIcons = {
-    bash: '⚡',
-    read_file: '📖',
-    write_file: '✏️',
-    list_dir: '📁',
-    fetch_url: '🌐',
-    spawn_agent: '🤖',
-    wait_for_agents: '⏳',
-  }
-
-  const icon = toolIcons[toolName] ?? '🔧'
-
-  // Format args for display
-  let argsDisplay = ''
-  if (toolName === 'bash' && args.command) {
-    argsDisplay = `$ ${args.command.length > 120 ? args.command.slice(0, 117) + '...' : args.command}`
-  } else if (toolName === 'read_file' || toolName === 'write_file' || toolName === 'list_dir') {
-    argsDisplay = args.path ?? ''
-  } else if (toolName === 'fetch_url') {
-    argsDisplay = args.url ?? ''
-  } else if (toolName === 'spawn_agent') {
-    argsDisplay = `${args.name} (${args.model})`
-  } else {
-    argsDisplay = JSON.stringify(args)
-  }
-
-  el.innerHTML = `
-    <div class="tool-call-header">
-      <span class="tool-icon">${icon}</span>
-      <span class="tool-name">${toolName}</span>
-      <span class="tool-status running" style="color:var(--yellow)">...</span>
-    </div>
-    <div class="tool-body collapsed">
-      <div class="tool-args">${escapeHtml(argsDisplay)}</div>
-      <div class="tool-result"></div>
-    </div>
-  `
-
-  // Toggle body on header click
-  const header = el.querySelector('.tool-call-header')
-  const body = el.querySelector('.tool-body')
-  header.addEventListener('click', () => body.classList.toggle('collapsed'))
-
-  return el
+  el.style.cssText = `padding:4px 12px;font-size:11px;color:${color};`
+  el.textContent = text
+  activityLog.appendChild(el)
+  activityScrollToBottom()
 }
+
+function activityScrollToBottom() {
+  activityLog.scrollTop = activityLog.scrollHeight
+}
+
+// ─── Chat ─────────────────────────────────────────────────────────────────────
 
 function renderMessage(msg) {
+  if (msg.metadata) {
+    try {
+      const meta = JSON.parse(msg.metadata)
+      if (meta.type === 'heartbeat_pulse' || meta.type === 'goal_run') return
+    } catch {}
+  }
+
   const el = document.createElement('div')
   el.className = `message ${msg.role}`
 
@@ -304,19 +276,18 @@ function renderMessage(msg) {
 
 function appendSystemMessage(text, isError = false) {
   const el = document.createElement('div')
-  el.style.cssText = `text-align:center;font-size:11px;color:${isError ? 'var(--red)' : 'var(--text-muted)'};padding:8px 0;`
+  el.className = 'system-msg'
+  el.style.color = isError ? 'var(--red)' : 'var(--text-muted)'
   el.textContent = text
   messagesEl.appendChild(el)
   scrollToBottom()
 }
 
 function formatContent(text) {
-  // Basic markdown-ish formatting
   return escapeHtml(text)
     .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\n/g, '\n')
 }
 
 function escapeHtml(str) {
@@ -331,14 +302,17 @@ function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight
 }
 
+// ─── Running state ────────────────────────────────────────────────────────────
+
 function setRunning(running) {
   isRunning = running
-  sendBtn.disabled = running
   abortBtn.classList.toggle('hidden', !running)
-  if (!running) {
-    agentBlocks.clear()
-  }
+  activityDot.className = `activity-dot ${running ? 'running' : 'idle'}`
+  activityLabel.textContent = running ? 'running' : 'idle'
+  if (!running) actAgents.clear()
 }
+
+// ─── Sessions ─────────────────────────────────────────────────────────────────
 
 async function loadSessions() {
   const res = await fetch('/api/sessions')
@@ -347,46 +321,163 @@ async function loadSessions() {
   for (const s of list) {
     const el = document.createElement('div')
     el.className = `session-item${s.id === currentSessionId ? ' active' : ''}`
+    el.dataset.sessionId = s.id
     el.textContent = s.title ?? 'New conversation'
     el.addEventListener('click', () => switchSession(s.id))
     sessionsList.appendChild(el)
   }
+  // Update title
+  const current = list.find(s => s.id === currentSessionId)
+  if (current) sessionTitle.textContent = current.title ?? 'New conversation'
 }
 
 function switchSession(id) {
   if (id === currentSessionId) return
   currentSessionId = id
   messagesEl.innerHTML = ''
-  agentBlocks.clear()
-  agentColors.clear()
-  colorIndex = 0
+  activityLog.innerHTML = ''
+  actAgents.clear()
   setRunning(false)
   ws.send(JSON.stringify({ type: 'join', session_id: id }))
 }
 
-function newChat() {
-  currentSessionId = null
-  messagesEl.innerHTML = ''
-  agentBlocks.clear()
-  agentColors.clear()
-  colorIndex = 0
-  setRunning(false)
-  ws.send(JSON.stringify({ type: 'join', session_id: null }))
+function randomUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16)
+  })
 }
+
+function newChat() {
+  const newId = randomUUID()
+  currentSessionId = newId
+  messagesEl.innerHTML = ''
+  activityLog.innerHTML = ''
+  actAgents.clear()
+  setRunning(false)
+  sessionTitle.textContent = 'New conversation'
+  ws.send(JSON.stringify({ type: 'join', session_id: newId }))
+}
+
+// ─── Send message ─────────────────────────────────────────────────────────────
 
 function sendMessage() {
   const content = inputEl.value.trim()
-  if (!content || isRunning) return
-
+  if (!content) return
   inputEl.value = ''
   inputEl.style.height = 'auto'
-  setRunning(true)
-  agentBlocks.clear()
-
+  if (!isRunning) {
+    setRunning(true)
+    activityLog.innerHTML = ''
+    actAgents.clear()
+  }
   ws.send(JSON.stringify({ type: 'message', content }))
 }
 
-// Event listeners
+// ─── Todo panel ───────────────────────────────────────────────────────────────
+
+const todoList = document.getElementById('todo-list')
+const todoAddBtn = document.getElementById('todo-add-btn')
+const todoAddForm = document.getElementById('todo-add-form')
+const todoInput = document.getElementById('todo-input')
+
+async function loadTodos() {
+  const res = await fetch('/api/todos')
+  const items = await res.json()
+  renderTodos(items)
+}
+
+function renderTodos(items) {
+  todoList.innerHTML = ''
+  const active = items.filter(t => t.status !== 'done')
+  const done = items.filter(t => t.status === 'done')
+  for (const t of [...active, ...done]) {
+    todoList.appendChild(makeTodoEl(t))
+  }
+}
+
+function makeTodoEl(t) {
+  const el = document.createElement('div')
+  el.className = `todo-item ${t.status}`
+  el.dataset.id = t.id
+
+  const check = document.createElement('div')
+  check.className = 'todo-check'
+  if (t.status === 'done') check.textContent = '✓'
+  check.title = t.status === 'done' ? 'Mark todo' : 'Mark done'
+  check.addEventListener('click', async () => {
+    const newStatus = t.status === 'done' ? 'todo' : 'done'
+    await fetch(`/api/todos/${t.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    })
+    loadTodos()
+  })
+
+  const text = document.createElement('div')
+  text.className = 'todo-text'
+  text.textContent = t.title
+  if (t.notes) text.title = t.notes
+
+  const del = document.createElement('button')
+  del.className = 'todo-delete'
+  del.textContent = '×'
+  del.title = 'Delete'
+  del.addEventListener('click', async () => {
+    await fetch(`/api/todos/${t.id}`, { method: 'DELETE' })
+    loadTodos()
+  })
+
+  if (t.priority) {
+    const pri = document.createElement('span')
+    pri.className = 'todo-priority'
+    pri.textContent = '⚡'
+    el.appendChild(check)
+    el.appendChild(text)
+    el.appendChild(pri)
+    el.appendChild(del)
+  } else {
+    el.appendChild(check)
+    el.appendChild(text)
+    el.appendChild(del)
+  }
+
+  return el
+}
+
+todoAddBtn.addEventListener('click', () => {
+  todoAddForm.classList.toggle('hidden')
+  if (!todoAddForm.classList.contains('hidden')) todoInput.focus()
+})
+
+todoInput.addEventListener('keydown', async (e) => {
+  if (e.key === 'Enter') {
+    const title = todoInput.value.trim()
+    if (!title) return
+    await fetch('/api/todos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    })
+    todoInput.value = ''
+    todoAddForm.classList.add('hidden')
+    loadTodos()
+  } else if (e.key === 'Escape') {
+    todoInput.value = ''
+    todoAddForm.classList.add('hidden')
+  }
+})
+
+// ─── Activity panel toggle ────────────────────────────────────────────────────
+
+activityBtn.addEventListener('click', () => {
+  const hidden = activityPanel.classList.toggle('hidden')
+  activityBtn.classList.toggle('active', !hidden)
+})
+
+// ─── Event listeners ──────────────────────────────────────────────────────────
+
 sendBtn.addEventListener('click', sendMessage)
 newChatBtn.addEventListener('click', newChat)
 abortBtn.addEventListener('click', () => {
@@ -400,78 +491,13 @@ inputEl.addEventListener('keydown', (e) => {
   }
 })
 
-// Auto-resize textarea
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto'
   inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px'
 })
 
-// ── Debug panel ───────────────────────────────────────────────────────────────
-
-const debugPanel = document.getElementById('debug-panel')
-const debugLog = document.getElementById('debug-log')
-const debugBtn = document.getElementById('debug-btn')
-const debugClose = document.getElementById('debug-close')
-const debugClear = document.getElementById('debug-clear')
-
-let debugSubscribed = false
-
-function toggleDebug() {
-  const hidden = debugPanel.classList.toggle('hidden')
-  if (!hidden && !debugSubscribed) {
-    ws.send(JSON.stringify({ type: 'debug_subscribe' }))
-    debugSubscribed = true
-  }
-}
-
-debugBtn.addEventListener('click', toggleDebug)
-debugClose.addEventListener('click', () => debugPanel.classList.add('hidden'))
-debugClear.addEventListener('click', () => { debugLog.innerHTML = '' })
-
-document.getElementById('debug-filter-debug').addEventListener('change', applyDebugFilters)
-document.getElementById('debug-filter-info').addEventListener('change', applyDebugFilters)
-document.getElementById('debug-filter-warn').addEventListener('change', applyDebugFilters)
-document.getElementById('debug-filter-error').addEventListener('change', applyDebugFilters)
-
-function applyDebugFilters() {
-  const show = {
-    debug: document.getElementById('debug-filter-debug').checked,
-    info: document.getElementById('debug-filter-info').checked,
-    warn: document.getElementById('debug-filter-warn').checked,
-    error: document.getElementById('debug-filter-error').checked,
-  }
-  for (const line of debugLog.querySelectorAll('.log-line')) {
-    const level = line.dataset.level
-    line.style.display = show[level] ? '' : 'none'
-  }
-}
-
-function appendLog(entry) {
-  const show = {
-    debug: document.getElementById('debug-filter-debug').checked,
-    info: document.getElementById('debug-filter-info').checked,
-    warn: document.getElementById('debug-filter-warn').checked,
-    error: document.getElementById('debug-filter-error').checked,
-  }
-
-  const line = document.createElement('div')
-  line.className = 'log-line'
-  line.dataset.level = entry.level
-  if (!show[entry.level]) line.style.display = 'none'
-
-  const ts = new Date(entry.ts).toTimeString().slice(0, 8)
-  const dataStr = entry.data !== undefined ? ' ' + JSON.stringify(entry.data) : ''
-
-  line.innerHTML = `
-    <span class="log-ts">${ts}</span>
-    <span class="log-level ${entry.level}">${entry.level}</span>
-    <span class="log-msg">${escapeHtml(entry.msg)}</span>
-    <span class="log-data">${escapeHtml(dataStr)}</span>
-  `
-
-  debugLog.appendChild(line)
-  debugLog.scrollTop = debugLog.scrollHeight
-}
-
 // Start
 connect()
+loadTodos()
+// Refresh todos periodically (agent may update them autonomously)
+setInterval(loadTodos, 30000)

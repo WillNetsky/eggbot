@@ -11,6 +11,7 @@ export type AgentEvent =
   | { type: 'done'; agentId: string; agentName: string; result: string }
   | { type: 'error'; agentId: string; agentName: string; message: string }
   | { type: 'spawn'; agentId: string; agentName: string; childId: string; childName: string }
+  | { type: 'injected'; agentId: string; agentName: string; message: string }
 
 export type EventEmitter = (event: AgentEvent) => void
 
@@ -24,6 +25,8 @@ export class Agent {
   private abortController: AbortController
   private childAgents: Map<string, Promise<string>> = new Map()
   private spawnAgent: (name: string, task: string, model: string, parentId: string) => Agent
+  private setGoalRef?: (path: string) => void
+  private pendingInjections: string[] = []
 
   constructor(opts: {
     id?: string
@@ -34,6 +37,7 @@ export class Agent {
     history?: Message[]
     emit: EventEmitter
     spawnAgent: (name: string, task: string, model: string, parentId: string) => Agent
+    setGoalRef?: (path: string) => void
   }) {
     this.id = opts.id ?? randomUUID()
     this.name = opts.name
@@ -41,6 +45,7 @@ export class Agent {
     this.sessionId = opts.sessionId
     this.emit = opts.emit
     this.spawnAgent = opts.spawnAgent
+    this.setGoalRef = opts.setGoalRef
     this.abortController = new AbortController()
 
     this.messages = [
@@ -63,6 +68,10 @@ export class Agent {
     this.abortController.abort()
   }
 
+  inject(message: string) {
+    this.pendingInjections.push(message)
+  }
+
   async run(userMessage: string): Promise<string> {
     this.messages.push({ role: 'user', content: userMessage })
 
@@ -71,6 +80,14 @@ export class Agent {
 
     while (iterations < maxIterations) {
       iterations++
+
+      // Inject any pending user messages before this iteration
+      while (this.pendingInjections.length > 0) {
+        const injection = this.pendingInjections.shift()!
+        this.messages.push({ role: 'user', content: `[User interjection]: ${injection}` })
+        this.emit({ type: 'injected', agentId: this.id, agentName: this.name, message: injection })
+      }
+
       let thinkingText = ''
 
       // Stream the response
@@ -126,7 +143,8 @@ export class Agent {
                   }
                 }
                 return results
-              }
+              },
+              this.setGoalRef
             )
 
             this.emit({

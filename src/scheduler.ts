@@ -1,12 +1,12 @@
 /**
  * Background goal runner.
  *
- * Wakes up on a configurable interval, reads all notes tagged "goal" + "active"
- * from the brain, and lets the orchestrator decide which ones need attention.
- * Results are written back to the goal notes and the daily log.
+ * Wakes up on a configurable interval, reads all notes tagged "goal" + "active",
+ * checks which are due, and for each due goal runs a focused orchestrator
+ * inside that goal's own persistent session thread.
  */
 
-import { searchByTag, readNote, buildContext } from './brain/index.js'
+import { searchByTag, readNote } from './brain/index.js'
 import { Orchestrator } from './agents/orchestrator.js'
 import { sessions, messages } from './store/db.js'
 import { randomUUID } from 'crypto'
@@ -18,27 +18,38 @@ type Broadcast = (sessionId: string, data: unknown) => void
 
 const INTERVAL_MS = (config.agent.goalIntervalMinutes ?? 30) * 60 * 1000
 
-const GOAL_RUNNER_PROMPT = `You are running an autonomous background goal review.
-
-1. Use brain_search to find all notes tagged "goal" and "active".
-2. Read each goal note with brain_read.
-3. For each active goal, check its "schedule" and "last_run" fields to decide if it's due.
-   - "hourly"  → due if last_run was >1 hour ago or missing
-   - "daily"   → due if last_run was not today
-   - "weekly"  → due if last_run was >7 days ago or missing
-   - "always"  → always due
-   - "once"    → due only if last_run is missing (one-time task)
-4. For each due goal, spawn an appropriate agent to carry out the work.
-5. After each goal is worked on, update the goal note:
-   - Set "last_run" to today's date
-   - Append a dated entry to the "## Log" section with a summary of what was done
-   - If the goal is "once" and now complete, change the "active" tag to "done"
-6. Append a summary of all work done to today's daily brain note.
-
-Be thorough but efficient. Skip goals that are not due. Do real work, not placeholders.`
-
 let running = false
 let timer: ReturnType<typeof setTimeout> | null = null
+
+function isDue(schedule: string | undefined, lastRun: string | undefined): boolean {
+  if (!schedule || schedule === 'always') return true
+  if (schedule === 'once') return !lastRun
+
+  const last = lastRun ? new Date(lastRun).getTime() : 0
+  const now = Date.now()
+  const today = new Date().toISOString().slice(0, 10)
+
+  if (schedule === 'hourly') return now - last > 60 * 60 * 1000
+  if (schedule === 'daily') return lastRun !== today
+  if (schedule === 'weekly') return now - last > 7 * 24 * 60 * 60 * 1000
+
+  return false
+}
+
+function goalPrompt(noteContent: string): string {
+  return `You are working on a specific goal. Here is the goal note:
+
+${noteContent}
+
+This goal is due. Work on it now:
+- Do the actual work described in the goal
+- After completing, update the goal note using brain_write:
+  - Set the "last_run" field to today's date
+  - Append a dated entry to the "## Log" section with a summary of what was done
+  - If the goal has schedule "once" and is now complete, change tag "active" to "done"
+
+Be thorough. Report what you did when finished.`
+}
 
 export function startScheduler(broadcast: Broadcast) {
   log.info(`[scheduler] Starting — checking goals every ${config.agent.goalIntervalMinutes ?? 30} minutes`)
@@ -65,13 +76,8 @@ export async function runGoals(broadcast: Broadcast) {
     return
   }
 
-  // Check if there are any active goals at all before spinning up
-  const activeGoals = searchByTag('goal').filter(n => {
-    // We stored tags as comma-separated in the index — re-check they also have 'active'
-    return true // orchestrator will filter; just check there's something
-  })
-
-  if (activeGoals.length === 0) {
+  const goalNotes = searchByTag('goal')
+  if (goalNotes.length === 0) {
     log.debug('[scheduler] No goal notes found, skipping run')
     return
   }
@@ -80,39 +86,77 @@ export async function runGoals(broadcast: Broadcast) {
   log.info('[scheduler] Running goal check')
 
   try {
-    // Create a background session for this run
-    const sessionId = randomUUID()
-    sessions.create(sessionId, `Goal run ${new Date().toISOString().slice(0, 16)}`)
+    for (const ref of goalNotes) {
+      const note = await readNote(ref.path)
+      if (!note) continue
 
-    const emit = (event: AgentEvent) => {
-      broadcast(sessionId, { type: 'agent_event', event })
-      if (event.type === 'error') {
-        log.error(`[scheduler] Agent error: ${event.message}`)
+      // Only process active goals
+      if (!note.meta.tags.includes('active')) continue
+
+      // Parse schedule/last_run from the note body
+      const scheduleMatch = note.body.match(/^schedule:\s*(.+)$/m)
+      const lastRunMatch = note.body.match(/^last_run:\s*(.+)$/m)
+      const schedule = scheduleMatch?.[1]?.trim()
+      const lastRun = lastRunMatch?.[1]?.trim()
+
+      if (!isDue(schedule, lastRun)) {
+        log.debug(`[scheduler] Goal not due: ${ref.path}`)
+        continue
+      }
+
+      log.info(`[scheduler] Working on goal: ${ref.path}`)
+
+      // Each goal has its own persistent session thread
+      const session = sessions.getOrCreateForGoal(ref.path, note.meta.title || ref.path)
+      const sessionId = session.id
+
+      const emit = (event: AgentEvent) => {
+        broadcast(sessionId, { type: 'agent_event', event })
+        if (event.type === 'error') {
+          log.error(`[scheduler] Agent error: ${event.message}`)
+        }
+      }
+
+      // Insert a run-start marker into the goal's thread
+      const runHeader = `--- Goal run ${new Date().toISOString().slice(0, 16)} ---`
+      messages.insert({
+        id: randomUUID(),
+        session_id: sessionId,
+        role: 'user',
+        content: runHeader,
+        agent_id: null,
+        agent_name: null,
+        metadata: JSON.stringify({ type: 'goal_run' }),
+      })
+
+      try {
+        const orchestrator = new Orchestrator(sessionId, emit)
+        const result = await orchestrator.handleMessage(goalPrompt(note.raw))
+
+        messages.insert({
+          id: randomUUID(),
+          session_id: sessionId,
+          role: 'assistant',
+          content: result,
+          agent_id: null,
+          agent_name: 'scheduler',
+          metadata: JSON.stringify({ type: 'goal_run' }),
+        })
+
+        sessions.touch(sessionId)
+
+        broadcast(sessionId, {
+          type: 'message',
+          message: { role: 'assistant', content: result, agent_name: 'scheduler' },
+        })
+
+        log.info(`[scheduler] Goal complete: ${ref.path}`)
+      } catch (err) {
+        log.error(`[scheduler] Goal failed: ${ref.path}`, err instanceof Error ? err.message : String(err))
       }
     }
 
-    const orchestrator = new Orchestrator(sessionId, emit)
-    const result = await orchestrator.handleMessage(GOAL_RUNNER_PROMPT)
-
-    // Save result to session
-    messages.insert({
-      id: randomUUID(),
-      session_id: sessionId,
-      role: 'assistant',
-      content: result,
-      agent_id: null,
-      agent_name: 'scheduler',
-      metadata: JSON.stringify({ type: 'goal_run' }),
-    })
-
-    broadcast(sessionId, {
-      type: 'message',
-      message: { role: 'assistant', content: result, agent_name: 'scheduler' },
-    })
-
-    log.info('[scheduler] Goal run complete')
-  } catch (err) {
-    log.error('[scheduler] Goal run failed', err instanceof Error ? err.message : String(err))
+    log.info('[scheduler] Goal check complete')
   } finally {
     running = false
   }

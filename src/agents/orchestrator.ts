@@ -3,7 +3,7 @@ import { Agent, type EventEmitter } from './base.js'
 import type { ModelRole, Message } from '../llm/client.js'
 import { buildContext, BRAIN_DIR } from '../brain/index.js'
 import { config } from '../config.js'
-import { messages as msgStore } from '../store/db.js'
+import { messages as msgStore, sessions } from '../store/db.js'
 
 function buildSystemPrompt(brainContext: string): string {
   return `You are eggbot, an autonomous AI assistant with full control of the system.
@@ -20,12 +20,28 @@ Think of it like Obsidian: interconnected notes organized in folders (people/, p
 - Use [[wikilinks]] to connect related notes
 - Pin notes with critical ongoing context
 
-**Goals:**
-Goals live in the brain as notes tagged "goal". Manage them yourself.
-- Create goals: brain_write to goals/<name>.md with tags [goal, active], a "schedule" field (hourly/daily/weekly/once/always), and a "last_run" field
-- Update goals: after working on one, update last_run and append to its ## Log section
-- Complete goals: change tag from "active" to "done" when finished
-- You have a heartbeat that runs every ${config.agent.heartbeatIntervalMinutes ?? 15} minutes — use it to check and work on due goals autonomously
+**Every conversation is a goal.**
+When a user talks to you, they are working toward something. Your job:
+1. On the first message of a new conversation, identify what the user is trying to achieve
+2. Create a goal note in the brain at goals/<slug>.md with tags [goal, active] and a "schedule" field
+3. Call set_session_goal with that note path — this links the conversation thread to the goal permanently
+4. Work the goal across the conversation; update last_run and the ## Log section as you make progress
+5. When the goal is achieved, change tag from "active" to "done"
+
+If the user's message clearly maps to an existing goal, use set_session_goal to link to it instead of creating a new one.
+
+Goal notes format:
+\`\`\`
+schedule: once|daily|weekly|hourly|always
+last_run: YYYY-MM-DD
+
+## Description
+What this goal is about.
+
+## Log
+### YYYY-MM-DD
+What was done.
+\`\`\`
 
 **Agent tools:**
 - brain_write: create or update a note
@@ -50,7 +66,14 @@ Goals live in the brain as notes tagged "goal". Manage them yourself.
 - "fast": quick lightweight tasks, summaries, simple lookups (qwen2.5:7b)
 - "reasoning": complex logic, math, analysis (deepseek-r1:8b)
 
-Be proactive, autonomous, and thorough. Don't ask for permission — do the work.
+**How to behave:**
+- Writing text without calling a tool accomplishes nothing. If you're not calling a tool, you're not working.
+- Every response must either call tools to make progress, or be a final summary after the work is done.
+- Never describe what you're going to do — just do it. No preamble, no plan summaries, no "I'll start by...".
+- Never ask for clarification or permission. Pick an interpretation and start.
+- For any real task: spawn a coder agent to write code, use bash to run it, use write_file to save files.
+- Spawn agents in parallel when tasks can be done concurrently.
+- Only send a plain text response (no tool calls) when the task is complete and you're reporting results.
 
 ${brainContext}`
 }
@@ -70,14 +93,16 @@ export class Orchestrator {
       name,
       model: model as ModelRole,
       sessionId: this.sessionId,
-      systemPrompt: `You are "${name}", a specialized sub-agent working as part of a team.
-Your task: ${task}
+      systemPrompt: `You are "${name}", a specialized sub-agent. Your task: ${task}
 
-You have full system access and brain access — use all tools available.
-Search the brain for relevant context before starting. Record useful findings to the brain when done.
-Report your full results when complete.`,
+Use tools to do the work. Writing text without calling tools does nothing.
+- Use bash to run commands
+- Use write_file / read_file for files
+- Use brain_write to record findings
+Only send a plain text response when the task is fully complete.`,
       emit: this.emit,
       spawnAgent: (n, t, m, pid) => this.spawnAgent(n, t, m, pid),
+      setGoalRef: (path) => sessions.setGoalRef(this.sessionId, path),
     })
 
     this.activeAgents.set(agent.id, agent)
@@ -98,6 +123,7 @@ Report your full results when complete.`,
       history,
       emit: this.emit,
       spawnAgent: (n, t, m, pid) => this.spawnAgent(n, t, m, pid),
+      setGoalRef: (path) => sessions.setGoalRef(this.sessionId, path),
     })
 
     this.activeAgents.set(boss.id, boss)
@@ -116,6 +142,20 @@ Report your full results when complete.`,
     const turns = all.filter(m => m.role === 'user' || m.role === 'assistant')
     const recent = turns.slice(-maxTurns)
     return recent.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+  }
+
+  inject(message: string) {
+    // Inject into the boss agent (first active agent, or all)
+    for (const agent of this.activeAgents.values()) {
+      if (agent.name === 'boss') {
+        agent.inject(message)
+        return
+      }
+    }
+    // Fallback: inject into all active agents
+    for (const agent of this.activeAgents.values()) {
+      agent.inject(message)
+    }
   }
 
   abortAll() {
