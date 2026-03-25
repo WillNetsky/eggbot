@@ -34,16 +34,17 @@ function buildHeartbeatPrompt(): string {
     todoSection = `\n\nThe todo list is empty. If you notice anything worth tracking from recent conversations, add it with todo_add.`
   }
 
-  return `This is your autonomous heartbeat. No user is present right now.
+  return `This is your autonomous heartbeat. No user is present — this is YOUR time to get work done.
 
-Take this time to:
-1. Reflect on recent conversations and extract anything worth remembering into the brain
-2. Notice any loose ends, upcoming things, or items that need follow-up
-3. Update today's daily note with a brief status entry if there's anything worth noting
-4. Do any proactive work you think would be useful for the user${todoSection}
+You are the boss of a team of agents. Act like it. Your job right now:
 
-Keep it lightweight if there's nothing pressing. Don't manufacture work.
-Check the date and time with bash if you need context on what "today" means.`
+1. **Work the todo list.** If there are actionable todos, DO them — spawn coder agents, run bash commands, make progress. Mark items in_progress when you start, done when you finish. This is your #1 priority.
+2. **Create new todos** when you notice things that need doing from brain notes, goals, or recent conversations.
+3. **Update the daily note** with what you accomplished this pulse.
+4. **Reflect briefly** — extract anything worth remembering into brain notes.
+
+Do NOT just report on the state of things. Do NOT describe what you could do. Actually do the work.
+If there's genuinely nothing to do, keep the pulse short.${todoSection}`
 }
 
 export function startHeartbeat(broadcast: Broadcast) {

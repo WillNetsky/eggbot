@@ -7,6 +7,7 @@
 
 import { Bot, type Context } from 'grammy'
 import { Orchestrator } from '../agents/orchestrator.js'
+import { chat } from '../llm/client.js'
 import { sessions, messages } from '../store/db.js'
 import { randomUUID } from 'crypto'
 import log from '../logger.js'
@@ -137,6 +138,18 @@ export async function startTelegram(token: string, allowedUsers: number[], broad
         agent_name: 'boss',
         metadata: JSON.stringify({ source: 'telegram' }),
       })
+
+      // Auto-rename session with a short title on first message
+      const isFirst = messages.list(sessionId).filter(m => m.role === 'user').length <= 1
+      if (isFirst) {
+        chat('fast', [
+          { role: 'user', content: `Summarize this conversation's goal as a short title (4-6 words, no punctuation, no quotes):\nUser: ${userText}\nAssistant: ${result.slice(0, 300)}` }
+        ]).then(({ content: title }) => {
+          const clean = title.trim().replace(/^["']|["']$/g, '').slice(0, 60)
+          sessions.updateTitle(sessionId, clean)
+          broadcast(sessionId, { type: 'session_renamed', sessionId, title: clean })
+        }).catch(() => {})
+      }
 
       // Send response (split if needed)
       clearInterval(typingInterval)

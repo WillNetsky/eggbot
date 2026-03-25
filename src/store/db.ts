@@ -101,7 +101,7 @@ export const sessions = {
     return db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as DbSession | undefined
   },
   list(): DbSession[] {
-    return db.prepare('SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 50').all() as DbSession[]
+    return db.prepare("SELECT * FROM sessions WHERE type != 'heartbeat' ORDER BY updated_at DESC LIMIT 50").all() as DbSession[]
   },
   updateTitle(id: string, title: string) {
     db.prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?').run(title, Date.now(), id)
