@@ -120,6 +120,7 @@ export class Agent {
               type: 'tool_call',
               agentId: this.id,
               agentName: this.name,
+              model: this.modelName,
               tool: toolCall.function.name,
               args,
             })
@@ -153,6 +154,7 @@ export class Agent {
               type: 'tool_result',
               agentId: this.id,
               agentName: this.name,
+              model: this.modelName,
               tool: toolCall.function.name,
               success: result.success,
               output: result.output,
