@@ -294,14 +294,16 @@ export async function executeTool(
       }
 
       case 'read_file': {
-        const content = await readFile(args.path, 'utf-8')
+        const resolved = args.path.replace(/^~/, homedir())
+        const content = await readFile(resolved, 'utf-8')
         return { success: true, output: content }
       }
 
       case 'write_file': {
-        await mkdir(dirname(args.path), { recursive: true })
-        await writeFile(args.path, args.content, 'utf-8')
-        return { success: true, output: `Written ${args.content.length} bytes to ${args.path}` }
+        const resolvedPath = args.path.replace(/^~/, homedir())
+        await mkdir(dirname(resolvedPath), { recursive: true })
+        await writeFile(resolvedPath, args.content, 'utf-8')
+        return { success: true, output: `Written ${args.content.length} bytes to ${resolvedPath}` }
       }
 
       case 'list_dir': {
